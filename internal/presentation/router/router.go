@@ -13,7 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func NewRouter(authHandler *handler.AuthHandler, authMiddleware *middleware.AuthMiddleware) http.Handler {
+func NewRouter(
+	authHandler *handler.AuthHandler,
+	userHandler *handler.UserHandler,
+	authMiddleware *middleware.AuthMiddleware,
+) http.Handler {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
@@ -37,22 +41,20 @@ func NewRouter(authHandler *handler.AuthHandler, authMiddleware *middleware.Auth
 		auth.GET("/verify", authHandler.Verify)
 	}
 
-	// Protected routes
-	protected := r.Group("/api")
-	protected.Use(authMiddleware.RequireAuth())
+	// Authenticated self-service
+	authMe := r.Group("/auth")
+	authMe.Use(authMiddleware.RequireAuth())
 	{
-		protected.GET("/profile", func(c *gin.Context) {
-			userID, _ := c.Get(string(constant.CtxUserID))
-			c.JSON(http.StatusOK, gin.H{"user_id": userID})
-		})
+		authMe.GET("/me", userHandler.GetMe)
+		authMe.PATCH("/me", userHandler.UpdateMe)
+	}
 
-		admin := protected.Group("/admin")
-		admin.Use(authMiddleware.RequirePermission(constant.PermAdmin))
-		{
-			admin.GET("/users", func(c *gin.Context) {
-				c.JSON(http.StatusOK, gin.H{"message": "admin only"})
-			})
-		}
+	// Admin-only user management
+	admin := r.Group("/admin")
+	admin.Use(authMiddleware.RequireAuth(), authMiddleware.RequirePermission(constant.PermAdmin))
+	{
+		admin.GET("/users", userHandler.ListUsers)
+		admin.PATCH("/users/:id", userHandler.AdminUpdate)
 	}
 
 	return r

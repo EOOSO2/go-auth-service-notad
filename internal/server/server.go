@@ -45,13 +45,15 @@ func NewServer() *http.Server {
 
 	providerFactory := provider.NewAuthProviderFactory(userRepo, firebaseSvc)
 	authUC := usecase.NewAuthUseCase(userRepo, jwtService, sessionStore, providerFactory)
+	userUC := usecase.NewUserUseCase(userRepo)
 
 	authHandler := handler.NewAuthHandler(authUC)
+	userHandler := handler.NewUserHandler(userUC)
 	authMiddleware := middleware.NewAuthMiddleware(authUC)
 
 	srv := &http.Server{
 		Addr:         fmt.Sprintf(":%d", port),
-		Handler:      router.NewRouter(authHandler, authMiddleware),
+		Handler:      router.NewRouter(authHandler, userHandler, authMiddleware),
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  time.Minute,

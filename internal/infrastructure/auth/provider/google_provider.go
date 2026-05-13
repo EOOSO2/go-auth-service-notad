@@ -41,7 +41,7 @@ func (p *GoogleProvider) Authenticate(ctx context.Context, req service.AuthReque
 		}
 		// First-time Google login: auto-create user
 		slog.Info("creating new user via Google login", "email", email)
-		newUser, err := entity.NewUser(uid, name, name, email, uid, []string{constant.PermStudent})
+		newUser, err := entity.NewUser(uid, name, name, email, uid, []string{constant.PermStudent, constant.PermTeacher})
 		if err != nil {
 			return nil, err
 		}

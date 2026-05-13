@@ -22,6 +22,15 @@ func NewUserPostgresRepository(db *sql.DB) repository.UserRepository {
 	return &userPostgresRepository{db: db}
 }
 
+const userColumns = `id, email_id, email_address, first_name, last_name, password, permission, created_at, updated_at`
+
+func scanUser(row interface{ Scan(...any) error }, u *entity.User) error {
+	return row.Scan(
+		&u.ID, &u.UserID, &u.EmailAddress, &u.FirstName, &u.LastName,
+		&u.Password, pq.Array(&u.Permission), &u.CreatedAt, &u.UpdatedAt,
+	)
+}
+
 func (r *userPostgresRepository) Create(ctx context.Context, user entity.User) (uuid.UUID, error) {
 	if user.Password != "" {
 		hashed, err := hashPassword(user.Password)
@@ -47,16 +56,23 @@ func (r *userPostgresRepository) Create(ctx context.Context, user entity.User) (
 	return id, nil
 }
 
-func (r *userPostgresRepository) GetByEmailID(ctx context.Context, userID string) (*entity.User, error) {
-	const query = `
-		SELECT id, email_id, email_address, first_name, last_name, password, permission, created_at, updated_at
-		FROM users WHERE email_id = $1`
-
+func (r *userPostgresRepository) GetByID(ctx context.Context, id uuid.UUID) (*entity.User, error) {
+	const query = `SELECT ` + userColumns + ` FROM users WHERE id = $1`
 	user := &entity.User{}
-	err := r.db.QueryRowContext(ctx, query, userID).Scan(
-		&user.ID, &user.UserID, &user.EmailAddress, &user.FirstName, &user.LastName,
-		&user.Password, pq.Array(&user.Permission), &user.CreatedAt, &user.UpdatedAt,
-	)
+	err := scanUser(r.db.QueryRowContext(ctx, query, id), user)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, repository.ErrUserNotFound
+		}
+		return nil, err
+	}
+	return user, nil
+}
+
+func (r *userPostgresRepository) GetByEmailID(ctx context.Context, userID string) (*entity.User, error) {
+	const query = `SELECT ` + userColumns + ` FROM users WHERE email_id = $1`
+	user := &entity.User{}
+	err := scanUser(r.db.QueryRowContext(ctx, query, userID), user)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, repository.ErrUserNotFound
@@ -67,15 +83,9 @@ func (r *userPostgresRepository) GetByEmailID(ctx context.Context, userID string
 }
 
 func (r *userPostgresRepository) GetByEmailAddress(ctx context.Context, email string) (*entity.User, error) {
-	const query = `
-		SELECT id, email_id, email_address, first_name, last_name, password, permission, created_at, updated_at
-		FROM users WHERE email_address = $1`
-
+	const query = `SELECT ` + userColumns + ` FROM users WHERE email_address = $1`
 	user := &entity.User{}
-	err := r.db.QueryRowContext(ctx, query, email).Scan(
-		&user.ID, &user.UserID, &user.EmailAddress, &user.FirstName, &user.LastName,
-		&user.Password, pq.Array(&user.Permission), &user.CreatedAt, &user.UpdatedAt,
-	)
+	err := scanUser(r.db.QueryRowContext(ctx, query, email), user)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, repository.ErrUserNotFound
@@ -85,14 +95,61 @@ func (r *userPostgresRepository) GetByEmailAddress(ctx context.Context, email st
 	return user, nil
 }
 
+func (r *userPostgresRepository) List(ctx context.Context, offset, limit int) ([]entity.User, int, error) {
+	var total int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	const query = `SELECT ` + userColumns + ` FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`
+	rows, err := r.db.QueryContext(ctx, query, limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	users := make([]entity.User, 0, limit)
+	for rows.Next() {
+		var u entity.User
+		if err := scanUser(rows, &u); err != nil {
+			return nil, 0, err
+		}
+		users = append(users, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	return users, total, nil
+}
+
 func (r *userPostgresRepository) Update(ctx context.Context, user *entity.User) error {
 	user.UpdatedAt = time.Now()
 	const query = `UPDATE users SET email_address=$1, first_name=$2, last_name=$3, permission=$4, updated_at=$5 WHERE id=$6`
-	_, err := r.db.ExecContext(ctx, query,
+	res, err := r.db.ExecContext(ctx, query,
 		user.EmailAddress, user.FirstName, user.LastName,
 		pq.Array(user.Permission), user.UpdatedAt, user.ID,
 	)
-	return err
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return repository.ErrUserNotFound
+	}
+	return nil
+}
+
+func (r *userPostgresRepository) UpdatePassword(ctx context.Context, id uuid.UUID, hashed string) error {
+	const query = `UPDATE users SET password=$1, updated_at=$2 WHERE id=$3`
+	res, err := r.db.ExecContext(ctx, query, hashed, time.Now(), id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return repository.ErrUserNotFound
+	}
+	return nil
 }
 
 func (r *userPostgresRepository) Delete(ctx context.Context, id string) error {
